@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lil Music Guy</title>
+    <link rel="stylesheet" href="/src/ui/styles.css" />
+  </head>
+  <body>
+    <div id="stage"></div>
+
+    <aside id="panel">
+      <h1>Lil Music Guy <span class="tag">test bench</span></h1>
+
+      <section>
+        <h2>Music source</h2>
+        <div class="sources">
+          <button data-source="simulated" title="Fake spectrum data, no sound">Simulated</button>
+          <button data-source="synth" title="Generated beat played through real audio analysis">Test track</button>
+          <button data-source="file" title="Play a local audio file">Audio file…</button>
+          <button data-source="mic" title="Listen through the microphone">Microphone</button>
+          <button data-source="off">Stop</button>
+        </div>
+        <input type="file" id="file-input" accept="audio/*" hidden />
+        <p class="hint" id="source-hint">Pick a source to get him moving.</p>
+
+        <label class="row" id="bpm-row">
+          <span>Tempo</span>
+          <input type="range" id="bpm" min="70" max="180" value="120" />
+          <output id="bpm-out">120</output>
+        </label>
+        <label class="row" id="level-row">
+          <span>Loudness</span>
+          <input type="range" id="level" min="0" max="100" value="80" />
+          <output id="level-out">80</output>
+        </label>
+        <label class="row" id="volume-row">
+          <span>Volume</span>
+          <input type="range" id="volume" min="0" max="100" value="60" />
+          <output id="volume-out">60</output>
+        </label>
+      </section>
+
+      <section>
+        <h2>What he hears</h2>
+        <div class="readout">
+          <div class="beat-dot" id="beat-dot"></div>
+          <div><strong id="bpm-detected">–</strong> BPM</div>
+          <div class="move" id="move">Idle</div>
+        </div>
+        <div class="meter"><span>Bass</span><div><i id="m-bass"></i></div></div>
+        <div class="meter"><span>Mid</span><div><i id="m-mid"></i></div></div>
+        <div class="meter"><span>Treble</span><div><i id="m-treble"></i></div></div>
+        <div class="meter"><span>Groove</span><div><i id="m-intensity"></i></div></div>
+      </section>
+
+      <section>
+        <h2>Customize</h2>
+        <div class="colors">
+          <label>Skin <input type="color" data-color="skin" /></label>
+          <label>Shirt <input type="color" data-color="shirt" /></label>
+          <label>Pants <input type="color" data-color="pants" /></label>
+          <label>Shoes <input type="color" data-color="shoes" /></label>
+        </div>
+        <div class="accessories" id="accessories"></div>
+      </section>
+    </aside>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
