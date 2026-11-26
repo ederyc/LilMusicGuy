@@ -18,12 +18,21 @@
           <button data-source="simulated" title="Fake spectrum data, no sound">Simulated</button>
           <button data-source="synth" title="Generated beat played through real audio analysis">Test track</button>
           <button data-source="file" title="Play a local audio file">Audio file…</button>
-          <button data-source="mic" title="Listen through the microphone">Microphone</button>
+          <button data-source="system" title="Share a tab or your screen with audio">Computer audio</button>
+          <button data-source="mic" title="Listen through the microphone or another input device">Mic / input</button>
           <button data-source="off">Stop</button>
         </div>
         <input type="file" id="file-input" accept="audio/*" hidden />
         <p class="hint" id="source-hint">Pick a source to get him moving.</p>
 
+        <label class="row" id="style-row">
+          <span>Style</span>
+          <select id="sim-style"></select>
+        </label>
+        <label class="row" id="device-row">
+          <span>Input</span>
+          <select id="input-device"></select>
+        </label>
         <label class="row" id="bpm-row">
           <span>Tempo</span>
           <input type="range" id="bpm" min="70" max="180" value="120" />
@@ -52,6 +61,20 @@
         <div class="meter"><span>Mid</span><div><i id="m-mid"></i></div></div>
         <div class="meter"><span>Treble</span><div><i id="m-treble"></i></div></div>
         <div class="meter"><span>Groove</span><div><i id="m-intensity"></i></div></div>
+      </section>
+
+      <section>
+        <h2>Vibe</h2>
+        <div class="vibe">
+          <strong id="vibe">–</strong>
+          <span id="vibe-sub"></span>
+        </div>
+        <div class="meter"><span>Energy</span><div><i id="t-energy"></i></div></div>
+        <div class="meter"><span>Punch</span><div><i id="t-punch"></i></div></div>
+        <div class="meter"><span>Bass</span><div><i id="t-bass"></i></div></div>
+        <div class="meter"><span>Bright</span><div><i id="t-bright"></i></div></div>
+        <div class="meter"><span>Noisy</span><div><i id="t-noisy"></i></div></div>
+        <div class="meter"><span>Swing</span><div><i id="t-swing"></i></div></div>
       </section>
 
       <section>

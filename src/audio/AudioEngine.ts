@@ -1,12 +1,14 @@
 import type { SpectrumSource } from './types';
 
 /**
- * Something that produces real sound into the engine (test track, file, mic,
- * and later: system/loopback audio from the user's device).
+ * Something that produces real sound into the engine (test track, file, mic or
+ * input device, computer audio).
  */
 export interface PlaybackSource {
   start(engine: AudioEngine): Promise<void>;
   stop(): void;
+  /** Called if the source ends on its own (e.g. the user stops screen sharing). */
+  onEnded?: () => void;
 }
 
 /**

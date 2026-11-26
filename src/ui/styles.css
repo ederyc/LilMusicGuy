@@ -148,6 +148,46 @@ button.active {
   accent-color: var(--accent);
 }
 
+/* selects span the slider and value columns */
+.row select {
+  grid-column: 2 / -1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button:disabled:hover {
+  border-color: var(--border);
+}
+
+.vibe {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.vibe strong {
+  font-size: 18px;
+  color: var(--accent);
+}
+
+.vibe span {
+  font-size: 12px;
+  color: var(--muted);
+  min-height: 1.2em;
+}
+
 .row output {
   text-align: right;
   font-variant-numeric: tabular-nums;
