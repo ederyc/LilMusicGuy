@@ -282,3 +282,13 @@ button:disabled:hover {
   gap: 6px;
   margin-top: 12px;
 }
+
+/* Inside the desktop app: just him, on a transparent window. */
+html:has(> body.desktop),
+body.desktop {
+  background: transparent;
+}
+
+body.desktop #panel {
+  display: none;
+}

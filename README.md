@@ -13,6 +13,30 @@ npm run calibrate  # print what the vibe detector hears for each simulated style
 
 Add `?source=simulated&style=lofi` (and optionally `&bpm=90`) to the URL to make him start dancing on load.
 
+## Desktop app
+
+```bash
+npm run desktop      # build, then launch as its own app (needed for macOS audio permissions)
+npm run desktop:dev  # same, but launched from the terminal so you can see its logs
+```
+
+He lives in the bottom-right corner of your screen, on his home prop, sitting on the top
+edge of the dock. **Wallpaper mode** (the default) keeps him behind all your windows, so you
+see him on the bare desktop. Control him from the **♪** in the menu bar: what he listens
+to, his home prop, and a link to the test bench. Buddy mode (on top and interactive) is next.
+
+- **Computer audio** on macOS needs 14.2+. The first time, macOS asks for Screen & System
+  Audio Recording permission (the screen video is never used). If it's denied, the ♪ menu
+  says so; allow it in System Settings → Privacy & Security and pick Computer audio again.
+- Launch with `npm run desktop`, not `electron .` from a terminal: macOS attributes the
+  permission to whichever app launched it, so from a terminal it'd be the terminal's.
+- Electron 45 needs Node 22.12+ to install.
+- Dev switches: `LMG_SOURCE=demo` starts on the demo beat for that run, `LMG_DEBUG=1` logs
+  the page here, `LMG_DEV_URL=http://localhost:5173` loads from `npm run dev` instead of the build.
+
+When nothing's playing he waits standing for a few seconds, then sits on the edge of his
+prop (legs swinging, the odd yawn), and after a minute he naps. Music wakes him up.
+
 ## Test bench sources
 
 | Source | What it tests |
@@ -38,4 +62,5 @@ SpectrumSource ──► FeatureExtractor ──► VibeDetector ──► Dance
 ### Tuning the vibes
 
 The prototypes in `VIBE_PROTOTYPES` were tuned against the simulated styles, which are cartoons of each genre. Real music will need adjusting: play songs you know, watch the trait meters in the **Vibe** panel, and move the prototypes toward what you see. `npm test` keeps the simulated styles honest while you do.
-- `src/character/LilGuy.ts`: the model, color customization, and accessory slots (`head`, `face`, `back`, `leftHand`, `rightHand`) for future shop items.
+- `src/character/Body.ts`: the physics layer. Every joint follows its target through a spring; the body's own accelerations drive secondary motion (head lag, arm flop, elbow whip, belly squash, hat wobble); two-bone IK keeps the feet planted so the knees bend. Tune the feel in `TUNING`, `JIGGLE` and `GAIN` at the top.
+- `src/character/LilGuy.ts`: the model (skinned torso, arms and legs on a skeleton with spine, neck, elbows, wrists, knees and ankles), color customization, and accessory slots (`head`, `face`, `back`, `leftHand`, `rightHand`) for future shop items.

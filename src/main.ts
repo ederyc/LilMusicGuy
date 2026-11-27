@@ -6,11 +6,19 @@ import { MicInput } from './audio/sources/MicInput';
 import { SIM_STYLES, SimulatedSource, type SimStyleName } from './audio/sources/SimulatedSource';
 import { SynthTrack } from './audio/sources/SynthTrack';
 import { SystemAudio } from './audio/sources/SystemAudio';
-import type { AudioFeatures, SpectrumSource } from './audio/types';
+import { SILENT_FEATURES, type AudioFeatures, type SpectrumSource } from './audio/types';
 import { VIBE_NAMES, VibeDetector, type VibeTraits } from './audio/VibeDetector';
 import { ACCESSORIES } from './character/accessories';
-import { Dancer } from './character/Dancer';
+import { Body } from './character/Body';
+import { Dancer, MOVES } from './character/Dancer';
 import { DEFAULT_COLORS, LilGuy, type LilGuyColors, type SlotName } from './character/LilGuy';
+import { PROPS, type Prop } from './scene/props';
+import { Zzz } from './scene/Zzz';
+
+// ?desktop=1: running inside the desktop app (transparent window, no test bench).
+const params = new URLSearchParams(location.search);
+const desktop = params.get('desktop') === '1';
+if (desktop) document.body.classList.add('desktop');
 
 // ---------------------------------------------------------------------------
 // Scene
@@ -24,8 +32,6 @@ stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 50);
-camera.position.set(0, 1.1, 4.4);
-camera.lookAt(0, 0.78, 0);
 
 scene.add(new THREE.HemisphereLight('#ffffff', '#b8b5d6', 1.6));
 const sun = new THREE.DirectionalLight('#ffffff', 1.8);
@@ -37,30 +43,74 @@ sun.shadow.camera.right = sun.shadow.camera.top = 1.5;
 sun.shadow.radius = 6;
 scene.add(sun);
 
-const ground = new THREE.Mesh(new THREE.CircleGeometry(0.9, 48), new THREE.ShadowMaterial({ opacity: 0.18 }));
+const ground = new THREE.Mesh(new THREE.CircleGeometry(1, 48), new THREE.ShadowMaterial({ opacity: 0.18 }));
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
-// A ring under his feet that pulses on each detected beat.
+// A ring on the floor around his home that pulses on each detected beat.
 const ringMat = new THREE.MeshBasicMaterial({ color: '#6c5ce7', transparent: true, opacity: 0 });
 const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.56, 64), ringMat);
 ring.rotation.x = -Math.PI / 2;
 ring.position.y = 0.002;
 scene.add(ring);
+// On the desktop the floor is the top of the dock, seen edge-on: no floor effects.
+ground.visible = ring.visible = !desktop;
 
 const guy = new LilGuy();
 scene.add(guy.object);
 const dancer = new Dancer();
+const body = new Body(guy.rig);
+const zzz = new Zzz();
+scene.add(zzz.object);
+for (const k of ['sitAfter', 'napAfter'] as const) {
+  if (params.get(k)) dancer[k] = Number(params.get(k));
+}
+
+// His home prop: he stands on top of it, sits on its front edge, naps there.
+let prop: Prop = PROPS[0].build();
+let ringScale = 1;
+function setProp(id: string) {
+  const def = PROPS.find((p) => p.id === id) ?? PROPS[0];
+  scene.remove(prop.object);
+  prop = def.build();
+  scene.add(prop.object);
+  guy.object.position.y = prop.top;
+  body.seatEdge = prop.frontEdge;
+  ringScale = Math.max(1, (prop.width * 0.75) / 0.5);
+  ground.scale.setScalar(Math.max(0.9, prop.width));
+  propSelect.value = def.id;
+  frameCamera();
+}
+
+/** Fit him and his prop in view (with room for jumps and raised arms). */
+function frameCamera() {
+  const height = prop.top + 1.9;
+  const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
+  if (desktop) {
+    // Looking down a little, placed so the front of the prop's base sits exactly on the
+    // window's bottom edge (which the desktop app lines up with the top of the dock).
+    const pitch = 0.14;
+    const below = Math.tan(pitch + halfFov); // slope of the bottom edge of the view
+    const above = Math.tan(halfFov - pitch); // slope of the top edge
+    const z = (height + prop.frontEdge * below) / (above + below);
+    camera.position.set(0, below * (z - prop.frontEdge), z);
+    camera.rotation.set(-pitch, 0, 0);
+  } else {
+    const narrow = camera.aspect < 0.8 ? 1.3 : 1; // pull back so he clears the panel on phones
+    const d = ((height * 0.62) / Math.tan(halfFov)) * narrow;
+    camera.position.set(0, height * 0.62, d);
+    camera.lookAt(0, height * 0.45, 0);
+  }
+  camera.updateProjectionMatrix();
+}
 
 function resize() {
   const w = stage.clientWidth;
   const h = stage.clientHeight;
   renderer.setSize(w, h);
   camera.aspect = w / h;
-  // On narrow screens, pull back so he stays fully in frame above the panel.
-  camera.position.z = w / h < 0.8 ? 5.8 : 4.4;
-  camera.updateProjectionMatrix();
+  frameCamera();
 }
 window.addEventListener('resize', resize);
 resize();
@@ -140,6 +190,8 @@ const bpmInput = $<HTMLInputElement>('bpm');
 const levelInput = $<HTMLInputElement>('level');
 const volumeInput = $<HTMLInputElement>('volume');
 const styleSelect = $<HTMLSelectElement>('sim-style');
+const danceSelect = $<HTMLSelectElement>('dance');
+const propSelect = $<HTMLSelectElement>('prop');
 const deviceSelect = $<HTMLSelectElement>('input-device');
 
 const HINTS: Record<Mode, string> = {
@@ -158,7 +210,9 @@ function updateControls(file?: File) {
   if (!hint.textContent?.startsWith("Couldn't")) {
     hint.textContent = mode === 'file' && file ? `Playing “${file.name}” on loop.` : HINTS[mode];
   }
-  $('bpm-row').hidden = !(mode === 'simulated' || mode === 'synth');
+  window.lilguy?.status({ mode, text: hint.textContent ?? '' });
+  // Tempo also drives a picked dance when nothing's playing.
+  $('bpm-row').hidden = !(mode === 'simulated' || mode === 'synth' || (mode === 'off' && danceSelect.value !== ''));
   $('level-row').hidden = mode !== 'simulated';
   $('volume-row').hidden = !(mode === 'synth' || mode === 'file');
   $('style-row').hidden = mode !== 'simulated';
@@ -212,6 +266,13 @@ function applyStyle(name: SimStyleName) {
   vibeDetector.reset();
 }
 
+danceSelect.add(new Option('Auto (follow the music)', ''));
+for (const m of MOVES) danceSelect.add(new Option(m.name, m.name));
+danceSelect.addEventListener('change', () => {
+  dancer.force(MOVES.find((m) => m.name === danceSelect.value) ?? null);
+  updateControls();
+});
+
 const bindRange = (input: HTMLInputElement, out: string, apply: (v: number) => void) => {
   const update = () => {
     $(out).textContent = input.value;
@@ -259,16 +320,41 @@ for (const acc of ACCESSORIES) {
 
 updateControls();
 
+for (const p of PROPS) propSelect.add(new Option(p.name, p.id));
+propSelect.addEventListener('change', () => setProp(propSelect.value));
+setProp(params.get('prop') ?? PROPS[0].id);
+
 // URL shortcuts for quick testing, e.g. ?source=simulated&style=lofi&bpm=128
-// (only simulated can autostart; real audio needs a click per browser rules).
-const params = new URLSearchParams(location.search);
+// (in a browser only simulated can autostart; real audio needs a click first).
+if (params.get('ui') === '0') $('panel').hidden = true; // just him, no test bench
 const styleParam = params.get('style');
 if (styleParam && styleParam in SIM_STYLES) applyStyle(styleParam as SimStyleName);
 if (params.get('bpm')) {
   bpmInput.value = params.get('bpm')!;
   bpmInput.dispatchEvent(new Event('input'));
 }
-if (params.get('source') === 'simulated') void setMode('simulated');
+const sourceParam = params.get('source');
+if (sourceParam === 'simulated' || sourceParam === 'demo') void setMode('simulated');
+else if (desktop && (sourceParam === 'system' || sourceParam === 'mic')) void setMode(sourceParam);
+const moveParam = params.get('move');
+if (moveParam && MOVES.some((m) => m.name === moveParam)) {
+  danceSelect.value = moveParam;
+  danceSelect.dispatchEvent(new Event('change'));
+}
+// ?at=<seconds>: simulate that long, then hold still on that frame (for screenshots).
+const freezeAt = params.get('at') ? Number(params.get('at')) : null;
+
+// ---------------------------------------------------------------------------
+// Desktop app bridge (see electron/): the menu-bar menu sends commands here.
+// ---------------------------------------------------------------------------
+window.lilguy?.onCommand((cmd) => {
+  if (cmd.type === 'source') {
+    hint.textContent = '';
+    void setMode(cmd.value === 'demo' ? 'simulated' : cmd.value);
+  } else if (cmd.type === 'prop') {
+    setProp(cmd.value);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Loop
@@ -286,27 +372,58 @@ const VIBE_LABELS = Object.fromEntries(VIBE_NAMES.map((v) => [v, v[0].toUpperCas
 let beatFlashUntil = 0;
 let ringPulse = 0;
 let lastNow = performance.now();
+let frozen = false;
+
+/**
+ * A picked dance with no music playing still needs a beat: fake a steady one at the
+ * Tempo slider so he can show the move off on its own.
+ */
+function metronome(t: number): AudioFeatures {
+  const bpm = Number(bpmInput.value);
+  return { ...SILENT_FEATURES, time: t, bpm, beat: (t * bpm) / 60, energy: 0.32, bass: 0.6, mid: 0.4, treble: 0.3, active: true };
+}
+
+const headTop = new THREE.Vector3();
+const ZZZ_OFFSET = new THREE.Vector3(0.14, 0.6, 0.05);
+
+function step(t: number, dt: number) {
+  // With no source we feed silence, so he eases back into his idle animation.
+  if (spectrumSource) spectrumSource.read(spectrum, t);
+  else spectrum.fill(0);
+  let features: AudioFeatures = extractor.process(spectrum, spectrumSource?.binHz ?? 23.4375, t);
+  if (!spectrumSource && danceSelect.value) features = metronome(t);
+
+  const vibe = vibeDetector.process(spectrum, spectrumSource?.binHz ?? 23.4375, features);
+  const pose = dancer.update(features, vibe, dt);
+  body.update(pose, dt);
+  body.apply();
+  prop.update(features, dt);
+  zzz.update(guy.rig.head.getWorldPosition(headTop).add(ZZZ_OFFSET), dancer.sleepiness, dt);
+  return { features, vibe };
+}
 
 function frame(now: number) {
   const t = now / 1000;
   const dt = Math.max(0, Math.min((now - lastNow) / 1000, 0.1));
   lastNow = now;
 
-  // With no source we feed silence, so he eases back into his idle animation.
-  if (spectrumSource) spectrumSource.read(spectrum, t);
-  else spectrum.fill(0);
-  const features: AudioFeatures = extractor.process(spectrum, spectrumSource?.binHz ?? 23.4375, t);
-
-  const vibe = vibeDetector.process(spectrum, spectrumSource?.binHz ?? 23.4375, features);
-  const pose = dancer.update(features, vibe, dt);
-  dancer.apply(guy.rig, pose);
+  if (freezeAt !== null) {
+    if (!frozen) {
+      for (let st = 0; st < freezeAt; st += 1 / 60) step(st, 1 / 60);
+      frozen = true;
+    }
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+    return;
+  }
+  const { features, vibe } = step(t, dt);
 
   if (features.isBeat) {
     ringPulse = 0.4 + 0.6 * features.beatStrength;
     beatFlashUntil = now + 90;
   }
   ringPulse *= Math.exp(-dt * 6);
-  ring.scale.setScalar(1 + (1 - ringPulse) * 0.25);
+  ring.scale.setScalar(ringScale * (1 + (1 - ringPulse) * 0.25));
   ringMat.opacity = ringPulse * 0.6;
 
   beatDot.classList.toggle('on', now < beatFlashUntil);
