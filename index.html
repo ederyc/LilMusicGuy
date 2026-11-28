@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self' ws://localhost:* http://localhost:*"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'self' ws://localhost:* http://localhost:*"
     />
     <title>Lil Music Guy</title>
     <link rel="stylesheet" href="/src/ui/styles.css" />
@@ -22,7 +22,7 @@
           <button data-source="simulated" title="Fake spectrum data, no sound">Simulated</button>
           <button data-source="synth" title="Generated beat played through real audio analysis">Test track</button>
           <button data-source="file" title="Play a local audio file">Audio file…</button>
-          <button data-source="system" title="Share a tab or your screen with audio">Computer audio</button>
+          <button data-source="system" title="In the picker choose Entire Screen and turn on “Also share system audio” (a single app window has no sound), or pick a browser tab playing music.">Computer audio</button>
           <button data-source="mic" title="Listen through the microphone or another input device">Mic / input</button>
           <button data-source="off">Stop</button>
         </div>
@@ -65,10 +65,15 @@
           <span>Dance</span>
           <select id="dance"></select>
         </label>
+        <label class="row" id="posture-row" title="Auto lets the music decide whether he stands, sits and bops, or lounges back. Pick one to hold it.">
+          <span>Posture</span>
+          <select id="posture"></select>
+        </label>
         <div class="meter"><span>Bass</span><div><i id="m-bass"></i></div></div>
         <div class="meter"><span>Mid</span><div><i id="m-mid"></i></div></div>
         <div class="meter"><span>Treble</span><div><i id="m-treble"></i></div></div>
         <div class="meter"><span>Groove</span><div><i id="m-intensity"></i></div></div>
+        <div class="meter" title="How much of what he hears is people talking (videos, podcasts) rather than music."><span>Talk</span><div><i id="m-talk"></i></div></div>
       </section>
 
       <section>

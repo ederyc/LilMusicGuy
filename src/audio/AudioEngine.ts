@@ -5,6 +5,14 @@ import type { SpectrumSource } from './types';
  * input device, computer audio).
  */
 export interface PlaybackSource {
+  /**
+   * Sources that capture audio (computer audio, mic) get their stream here, before any
+   * audio device is touched: browsers only allow a capture prompt shortly after the click,
+   * and opening an audio device can take seconds (Bluetooth headphones waking up).
+   */
+  acquire?(): Promise<void>;
+  /** Only listened to, never played out loud: the engine then opens no output device. */
+  readonly listenOnly?: boolean;
   start(engine: AudioEngine): Promise<void>;
   stop(): void;
   /** Called if the source ends on its own (e.g. the user stops screen sharing). */
@@ -26,8 +34,13 @@ export class AudioEngine implements SpectrumSource {
   readonly analyser: AnalyserNode;
   private speakers: GainNode;
 
-  constructor() {
-    this.ctx = new AudioContext();
+  /**
+   * `output: false` analyses without playing anything, so no output device is opened at
+   * all (Chrome / Electron). That matters with Bluetooth headphones: opening one can stall
+   * while they switch modes, and capture-only sources never need speakers.
+   */
+  constructor(readonly output = true) {
+    this.ctx = new AudioContext(output ? {} : ({ sinkId: { type: 'none' } } as AudioContextOptions));
     this.input = this.ctx.createGain();
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = 2048;
@@ -57,7 +70,29 @@ export class AudioEngine implements SpectrumSource {
     this.speakers.gain.setTargetAtTime(v, this.ctx.currentTime, 0.02);
   }
 
-  async resume(): Promise<void> {
-    if (this.ctx.state !== 'running') await this.ctx.resume();
+  /** Start the audio clock; fails (instead of hanging) if the device doesn't respond. */
+  async resume(timeoutMs = 5000): Promise<void> {
+    if (this.ctx.state === 'running') return;
+    let timer = 0;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = window.setTimeout(
+        () =>
+          reject(
+            new Error(
+              "the audio device isn't responding. If you're on Bluetooth headphones, wait a moment for them to connect (or switch output to the speakers) and try again.",
+            ),
+          ),
+        timeoutMs,
+      );
+    });
+    try {
+      await Promise.race([this.ctx.resume(), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  close(): void {
+    void this.ctx.close().catch(() => {});
   }
 }

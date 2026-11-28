@@ -27,6 +27,8 @@ export interface Pose {
   legL: number;
   legR: number;
   eyeOpen: number;
+  /** Brows: 1 = furrowed (focused, intense), -1 = raised (surprised), 0 = neutral. */
+  browDown: number;
 
   // --- Hips (feet stay planted; knees bend to make up the difference)
   /** Lower the hips (bend the knees). */
@@ -89,6 +91,7 @@ const ZERO: Pose = {
   legL: 0,
   legR: 0,
   eyeOpen: 1,
+  browDown: 0,
   hipDrop: 0,
   hipShift: 0,
   hipPush: 0,
@@ -436,6 +439,48 @@ const YAWN_SECONDS = 2.4;
 /** He sits turned a little to one side: it's comfier, and it reads better from the front. */
 const SIT_TURN = 0.5;
 
+/**
+ * How he's holding himself. The music (or talk) picks one; he moves between them in
+ * order, so going from lounging to dancing means sitting up, then standing up.
+ */
+export type Posture = 'stand' | 'sit' | 'lounge';
+
+/** Something he heard (from transcribed words) that's worth a reaction. */
+export type Cue = 'laugh' | 'question' | 'greeting' | 'music' | 'wow';
+
+/** What's going on around him besides the music features. */
+export interface Surroundings {
+  /** 0..1: how much of what he hears is people talking (videos, podcasts) rather than music. */
+  talk: number;
+  /** Someone is speaking right now (flickers with words and pauses). */
+  speaking: boolean;
+  /** A reaction to play once, e.g. from transcribed words. */
+  cue?: Cue | null;
+}
+
+const QUIET: Surroundings = { talk: 0, speaking: false };
+
+/** A posture needs to be wanted this long before he changes to it… */
+const POSTURE_CONFIRM = 2.5;
+/** …and he stays in a posture at least this long (unless the music suddenly kicks in). */
+const POSTURE_MIN_STAY = 5;
+const CUE_SECONDS: Record<Cue, number> = { laugh: 1.6, question: 1.6, greeting: 1.9, music: 1.4, wow: 1.4 };
+
+/** Which posture fits the music. `drive` is the slowly smoothed loudness (0..1). */
+export function postureFor(vibe: VibeName, drive: number): Posture {
+  if (drive > 0.55) return 'stand';
+  switch (vibe) {
+    case 'mellow':
+      return 'lounge';
+    case 'chill':
+      return drive < 0.32 ? 'lounge' : 'sit';
+    case 'groovy':
+      return drive < 0.22 ? 'sit' : 'stand';
+    default:
+      return 'stand';
+  }
+}
+
 /** Sitting on the edge of his prop: legs swinging, looking around, the odd yawn and stretch. */
 function chillPose(t: number, yawn: number): Pose {
   const swing = (phase: number) => 0.07 * Math.sin(t * 2.4 + phase);
@@ -457,6 +502,90 @@ function chillPose(t: number, yawn: number): Pose {
     headTilt: 0.1 * Math.sin(t * 0.5),
     headTurn: 0.45 * look * (1 - yawn),
     eyeOpen: 0.85 - 0.65 * yawn,
+    browDown: -0.3 * yawn,
+  });
+}
+
+/**
+ * Sitting and vibing: head bopping on the beat, swaying every two beats, drumming on his
+ * thighs and tapping alternate feet. Bigger with louder music.
+ */
+function sitGroovePose(b: number, drive: number): Pose {
+  const h = hit(b);
+  const amt = 0.55 + 0.45 * drive;
+  const sway = Math.sin((Math.PI * b) / 2);
+  const left = alt(b) > 0;
+  return pose({
+    sit: 1,
+    bodyYaw: SIT_TURN * 0.6,
+    lean: 0.04,
+    squash: 0.02 * h * amt,
+    headNod: 0.04 + 0.17 * h * amt,
+    headTilt: 0.07 * sway,
+    bodyRoll: 0.05 * sway,
+    armFwdL: 0.55, armFwdR: 0.55,
+    armOutL: 0.15, armOutR: 0.15,
+    elbowL: 0.75 + 0.25 * (left ? h : 0),
+    elbowR: 0.75 + 0.25 * (left ? 0 : h),
+    wristL: left ? 0.45 * h : 0,
+    wristR: left ? 0 : 0.45 * h,
+    footLiftL: left ? 0.04 * h : 0,
+    footLiftR: left ? 0 : 0.04 * h,
+    footFwdL: left ? 0.05 * h : 0,
+    footFwdR: left ? 0 : 0.05 * h,
+    eyeOpen: 0.9,
+  });
+}
+
+/**
+ * Laid back: leaning way back on his hands, one leg stretched out, the other foot
+ * tapping, head bopping slow and easy. `groove` 0..1 = how much music there is to bop to.
+ */
+function loungePose(b: number, t: number, groove: number): Pose {
+  const bop = soft(b) * groove;
+  const breathe = Math.sin(t * 1.4);
+  return pose({
+    sit: 1,
+    bodyYaw: 0.95, // side-on, so you can see him leaning back
+    lean: -0.62,
+    chestLean: -0.25,
+    squash: 0.01 * breathe,
+    headNod: 0.72 + 0.13 * bop,
+    headTurn: -0.55, // ...but looking back out at you
+    headTilt: 0.16 + 0.05 * Math.sin((Math.PI * b) / 2) * groove,
+    armFwdL: -1.35, armFwdR: -1.35,
+    armOutL: 0.32, armOutR: 0.32,
+    elbowL: -0.1, elbowR: -0.1,
+    wristL: -0.5, wristR: -0.5,
+    footFwdL: 0.16,
+    footLiftL: 0.13,
+    footFwdR: 0.02 + 0.05 * hit(b) * groove,
+    footLiftR: 0.03 * hit(b) * groove,
+    eyeOpen: 0.55,
+    browDown: -0.15,
+  });
+}
+
+/**
+ * Watching a video / listening to someone talk: turned toward the screen, chin in his
+ * hand, nodding along when the speaker pauses.
+ */
+function watchPose(t: number, nod: number): Pose {
+  const drift = Math.sin(t * 0.23);
+  return pose({
+    sit: 1,
+    bodyYaw: -0.2,
+    lean: 0.18,
+    headTurn: -0.32 + 0.06 * drift,
+    headNod: -0.02 + 0.2 * nod,
+    headTilt: -0.14,
+    // chin on his right hand, elbow on his knee; the other hand on his lap
+    armFwdR: 1.15, armOutR: 0.05, elbowR: 2.05, wristR: -0.3,
+    armFwdL: 0.55, armOutL: 0.15, elbowL: 0.8,
+    footFwdL: 0.03 * Math.sin(t * 0.9),
+    footFwdR: 0.04,
+    eyeOpen: 0.9,
+    browDown: 0.1,
   });
 }
 
@@ -480,7 +609,45 @@ function napPose(t: number): Pose {
     footFwdL: 0.02,
     footFwdR: -0.01,
     eyeOpen: 0.1,
+    browDown: -0.2,
   });
+}
+
+/** Add a short reaction on top of whatever he's doing. `u` runs 0..1 over the reaction. */
+function react(out: Pose, cue: Cue, u: number, t: number): void {
+  const env = Math.sin(Math.PI * Math.min(1, u)) ** 0.5;
+  switch (cue) {
+    case 'laugh': // shoulders shaking, eyes squeezed, head back
+      out.squash += 0.03 * Math.sin(t * 38) * env;
+      out.headNod -= 0.2 * env;
+      out.eyeOpen = Math.min(out.eyeOpen, 1 - 0.75 * env);
+      out.browDown -= 0.5 * env;
+      out.armOutL += 0.3 * env;
+      out.armOutR += 0.3 * env;
+      break;
+    case 'question': // "hm?" head tilt, brows up
+      out.headTilt += 0.35 * env;
+      out.browDown -= 0.7 * env;
+      break;
+    case 'greeting': // a little wave
+      out.armOutL = lerp(out.armOutL, 2.5, env);
+      out.armFwdL = lerp(out.armFwdL, 0.25, env);
+      out.elbowL = lerp(out.elbowL, 0.4, env);
+      out.elbowUpL = lerp(out.elbowUpL, 0.5 * Math.sin(t * 14), env);
+      out.browDown -= 0.4 * env;
+      break;
+    case 'music': // perks up
+      out.headNod -= 0.12 * env;
+      out.browDown -= 0.6 * env;
+      out.eyeOpen = Math.max(out.eyeOpen, env);
+      break;
+    case 'wow': // leans back, eyes wide
+      out.lean -= 0.15 * env;
+      out.headNod -= 0.15 * env;
+      out.browDown -= 1 * env;
+      out.eyeOpen = Math.max(out.eyeOpen, env);
+      break;
+  }
 }
 
 /** Smoothly move `x` toward `target` at `rate` (1/s), frame-rate independent. */
@@ -489,19 +656,27 @@ function approach(x: number, target: number, dt: number, rate: number): number {
 }
 
 /**
- * Turns AudioFeatures + the detected vibe into motion. Holds an idle animation when there's
- * no music and fades into dancing when there is. While the vibe is still being worked out he
- * listens; after that, every 8 beats he switches to a new move suited to the vibe and
- * crossfades between them.
+ * Turns AudioFeatures + the detected vibe (+ whether people are talking) into motion.
+ *
+ * - **Posture** comes from the music: dancing on his feet for energetic songs, sitting on
+ *   the edge bopping his head for laid-back ones, lounging back on his hands for the
+ *   quietest. A sudden surge (a drop) gets him up right away; otherwise changes need a
+ *   few seconds of agreement so he doesn't fidget.
+ * - **Standing**, every 8 beats he switches to a new move suited to the vibe and crossfades.
+ *   Heavy, loud music makes him squint and furrow his brows.
+ * - **Talking** (videos, podcasts): he sits and watches the screen, nodding along.
+ * - **Quiet**: idle, then sitting, then napping.
  */
 export class Dancer {
-  /** 0 = idle, 1 = full dance. Exposed for UI/debug. */
+  /** 0 = still, 1 = full dance. Exposed for UI/debug. */
   intensity = 0;
   currentMove: DanceMove = MOVES[0];
 
   private prevMove: DanceMove = MOVES[0];
   /** When set, he does only this move (test bench "Dance" picker). */
   private forced: DanceMove | null = null;
+  /** When set, he holds this posture (test bench). */
+  private forcedPosture: Posture | null = null;
   private lastBeat = 0;
   private segment = -1;
   private segmentStart = 0;
@@ -512,10 +687,28 @@ export class Dancer {
   /** Seconds of quiet so far. */
   private quietFor = 0;
   private sitMix = 0;
+  private loungeMix = 0;
   private napMix = 0;
+  private grooveMix = 0;
+  private watchMix = 0;
+  private intenseMix = 0;
   private startleAt = -Infinity;
   private yawnAt = -Infinity;
   private nextYawn = 15;
+
+  private posture: Posture = 'stand';
+  private postureSince = 0;
+  private candidate: Posture = 'stand';
+  private candidateSince = 0;
+  private fastDrive = 0;
+  private slowDrive = 0;
+  private surgeAt = -Infinity;
+  private activeFor = 0;
+  private talkSince = Infinity;
+  private speakingFor = 0;
+  private nodAt = -Infinity;
+  private cue: Cue | null = null;
+  private cueAt = -Infinity;
 
   /** Seconds of quiet before he sits down on his prop, and before he dozes off. */
   sitAfter = 6;
@@ -528,7 +721,6 @@ export class Dancer {
   private lastVibe: VibeName | null = null;
   private lastVibeAt = -Infinity;
 
-  /** What he's doing, for the UI. */
   /** Lock him to one move, or pass null to go back to picking by the music. */
   force(move: DanceMove | null): void {
     this.forced = move;
@@ -539,17 +731,34 @@ export class Dancer {
     }
   }
 
+  /** Hold a posture regardless of the music (test bench), or null for automatic. */
+  forcePosture(p: Posture | null): void {
+    this.forcedPosture = p;
+  }
+
+  /** The posture he's settled on (he may still be moving into it). */
+  get currentPosture(): Posture {
+    return this.posture;
+  }
+
+  /** What he's doing, for the UI. */
   get label(): string {
-    if (this.intensity < 0.15) {
-      if (this.sleepiness > 0.5) return 'Napping';
-      if (this.sitMix > 0.5) return 'Chilling';
-      return 'Idle';
+    if (this.cue && this.time - this.cueAt < CUE_SECONDS[this.cue]) {
+      return { laugh: 'Laughing', question: 'Hm?', greeting: 'Waving', music: 'Perking up', wow: 'Whoa' }[this.cue];
     }
+    if (this.sitMix > 0.5) {
+      if (this.sleepiness > 0.5) return 'Napping';
+      if (this.watchMix > 0.5) return 'Watching';
+      if (this.listenMix > 0.5) return 'Listening…';
+      if (this.loungeMix > 0.5) return this.grooveMix > 0.5 ? 'Lounging' : 'Laid back';
+      return this.grooveMix > 0.5 ? 'Vibing' : 'Chilling';
+    }
+    if (this.intensity < 0.15) return 'Idle';
     if (this.listenMix > 0.5) return 'Listening…';
     return this.currentMove.name;
   }
 
-  update(f: AudioFeatures, vibe: Vibe | null, dt: number): Pose {
+  update(f: AudioFeatures, vibe: Vibe | null, dt: number, around: Surroundings = QUIET): Pose {
     dt = Math.max(0, Math.min(dt, 0.1));
     this.time += dt;
     // Typical music sits around 0.15–0.4 raw energy; stretch that to 0..1.
@@ -558,10 +767,49 @@ export class Dancer {
     this.lastBeat = b;
     const bp = b + (f.bpm ? (LEAD_SECONDS * f.bpm) / 60 : 0);
     const t = this.time;
+    const talking = f.active && around.talk > 0.55;
 
     if (vibe?.name) {
       this.lastVibe = vibe.name;
       this.lastVibeAt = t;
+    }
+
+    // --- Sudden changes: a fast and a slow read of the loudness. When the fast one jumps
+    // well above the slow one (a drop after a quiet build), that's a surge.
+    // (Only within a song: music starting from silence isn't a surge, he listens first.)
+    this.activeFor = f.active ? this.activeFor + dt : 0;
+    this.fastDrive = approach(this.fastDrive, f.active ? drive : 0, dt, 3);
+    this.slowDrive = approach(this.slowDrive, f.active ? drive : 0, dt, 0.3);
+    const inSong = this.activeFor > 5;
+    if (inSong && this.fastDrive - this.slowDrive > 0.25 && this.fastDrive > 0.5 && t - this.surgeAt > 4 && !talking) {
+      this.surgeAt = t;
+    }
+    const surging = t - this.surgeAt < 2.5;
+    const hurry = surging ? 2.5 : 1;
+
+    // --- Posture: what fits what he hears, confirmed over a few seconds.
+    if (talking) this.talkSince = Math.min(this.talkSince, t);
+    else this.talkSince = Infinity;
+    let want: Posture = this.posture;
+    if (this.forcedPosture) want = this.forcedPosture;
+    else if (this.forced) want = 'stand';
+    else if (talking) want = t - this.talkSince > 45 ? 'lounge' : 'sit';
+    else if (f.active && vibe?.name && !vibe.listening) want = postureFor(vibe.name, this.slowDrive);
+    else if (f.active && !vibe) want = this.slowDrive > 0.2 ? 'stand' : this.posture; // no vibe info at all
+    if (want !== this.candidate) {
+      this.candidate = want;
+      this.candidateSince = t;
+    }
+    const settled = t - this.candidateSince > POSTURE_CONFIRM && t - this.postureSince > POSTURE_MIN_STAY;
+    const kickIn = surging && this.posture !== 'stand' && !talking && !this.forcedPosture;
+    if (kickIn) {
+      this.candidate = 'stand';
+      if (this.sitMix > 0.5) this.startleAt = t; // "whoa!" then up
+    }
+    const next = kickIn ? 'stand' : this.candidate;
+    if (next !== this.posture && (settled || kickIn || this.forcedPosture || this.forced)) {
+      this.posture = next;
+      this.postureSince = t;
     }
 
     // Pick a new move each segment.
@@ -581,50 +829,101 @@ export class Dancer {
     dance.squash *= 0.7 + 0.6 * f.bass;
 
     // Still making up his mind: listen instead of dancing.
-    const listenTarget = vibe?.listening && f.active && !this.forced ? 1 : 0;
-    this.listenMix += (listenTarget - this.listenMix) * (1 - Math.exp(-dt * 4));
+    const listenTarget = vibe?.listening && f.active && !this.forced && !talking ? 1 : 0;
+    this.listenMix = approach(this.listenMix, listenTarget, dt, 4);
     dance = lerpPose(dance, listeningPose(bp, t), this.listenMix);
 
     // Idle, flavored by the vibe he last heard.
     const idleVibe = this.lastVibe && t - this.lastVibeAt < IDLE_MEMORY ? this.lastVibe : 'none';
     const idle = IDLES[idleVibe](t);
 
-    // Resting: the longer it's quiet, the more settled he gets. A short gap between
-    // songs he waits on his feet; then he sits on his prop's edge; eventually he naps.
+    // --- Resting: the longer it's quiet, the more settled he gets. A short gap between
+    // songs he waits on his feet (or wherever he was); then he sits; eventually he naps.
     this.quietFor = f.active ? 0 : this.quietFor + dt;
-    const sitTarget = this.quietFor > this.sitAfter ? 1 : 0;
+    const quietSit = this.quietFor > this.sitAfter;
     const napTarget = this.quietFor > this.napAfter ? 1 : 0;
     if (f.active && this.napMix > 0.4) this.startleAt = t; // music woke him up
-    this.sitMix = approach(this.sitMix, sitTarget, dt, sitTarget ? 1.2 : 2.5);
-    this.napMix = approach(this.napMix, napTarget, dt, napTarget ? 0.35 : 6); // dozes off slowly, wakes at once
+    // Once he's sat down for a quiet spell, he stays seated to hear out the next song.
+    if (quietSit && this.sitMix > 0.9 && this.posture === 'stand' && !this.forcedPosture) {
+      this.posture = 'sit';
+      this.postureSince = t;
+    }
+    if (!f.active && this.posture === 'lounge' && this.quietFor > 3) this.posture = 'sit';
 
-    if (this.sitMix > 0.9 && this.napMix < 0.1 && t > this.nextYawn) {
+    // Order matters: lounging needs sitting first; standing needs sitting up first.
+    const seated = this.posture !== 'stand' || quietSit;
+    const loungeTarget = this.posture === 'lounge' && this.sitMix > 0.85 && f.active ? 1 : 0;
+    this.loungeMix = approach(this.loungeMix, loungeTarget, dt, loungeTarget ? 1 : 2.2 * hurry);
+    const sitTarget = seated || this.loungeMix > 0.2 ? 1 : 0;
+    this.sitMix = approach(this.sitMix, sitTarget, dt, sitTarget ? 1.2 : 2.5 * hurry);
+    this.napMix = approach(this.napMix, napTarget, dt, napTarget ? 0.35 : 6); // dozes off slowly, wakes at once
+    this.grooveMix = approach(this.grooveMix, f.active && !talking ? 1 : 0, dt, 2);
+    this.watchMix = approach(this.watchMix, talking ? 1 : 0, dt, 1.2);
+
+    if (this.sitMix > 0.9 && this.napMix < 0.1 && !f.active && t > this.nextYawn) {
       this.yawnAt = t;
       this.nextYawn = t + 18 + Math.random() * 20;
     }
     const u = (t - this.yawnAt) / YAWN_SECONDS;
     const yawn = u >= 0 && u <= 1 ? Math.sin(Math.PI * u) ** 2 : 0;
 
-    let rest = lerpPose(idle, chillPose(t, yawn), this.sitMix);
-    rest = lerpPose(rest, napPose(t), this.napMix * this.sitMix);
+    // Nod along when a speaker finishes a phrase.
+    if (around.speaking) this.speakingFor += dt;
+    else {
+      if (this.speakingFor > 1.2 && t - this.nodAt > 2.5) this.nodAt = t;
+      this.speakingFor = 0;
+    }
+    const nu = (t - this.nodAt) / 0.7;
+    const nod = nu >= 0 && nu <= 1 ? Math.sin(Math.PI * nu) : 0;
+
+    let sitting = lerpPose(chillPose(t, yawn), sitGroovePose(bp, drive), this.grooveMix);
+    sitting = lerpPose(sitting, watchPose(t, nod), this.watchMix);
+    if (this.listenMix > 0.01) {
+      // seated listening: hand up on his headphones
+      sitting = lerpPose(sitting, { ...sitting, armOutR: 2.5, armFwdR: 0.35, elbowR: 0.3, headTilt: 0.22 }, this.listenMix);
+    }
+    sitting = lerpPose(sitting, loungePose(bp, t, this.grooveMix), this.loungeMix);
+    sitting = lerpPose(sitting, napPose(t), this.napMix);
 
     // He gets up before he gets down: dancing waits until he's off his seat.
-    const target = f.active ? (0.55 + 0.45 * drive) * (1 - this.sitMix) : 0;
-    this.intensity += (target - this.intensity) * (1 - Math.exp(-dt * 3));
+    const target = f.active && !talking ? (0.55 + 0.45 * drive) * (1 - this.sitMix) : 0;
+    this.intensity = approach(this.intensity, target, dt, 3);
+    const standing = lerpPose(idle, dance, this.intensity);
 
-    const out = lerpPose(rest, dance, this.intensity);
+    const out = lerpPose(standing, sitting, this.sitMix);
 
-    // Startled awake: eyes wide, a jolt, arms fly out, then it fades.
+    // Heavy, loud music: squint and furrow, and bang harder.
+    const heavy = vibe?.name === 'headbang' || vibe?.name === 'hype' || (this.currentMove.vibes.headbang ?? 0) >= 0.6;
+    const intenseTarget = heavy && this.fastDrive > 0.55 && this.sitMix < 0.3 && !this.listenMix ? 1 : 0;
+    this.intenseMix = approach(this.intenseMix, intenseTarget, dt, intenseTarget ? 1.5 : 2.5);
+    const ix = this.intenseMix * (1 - this.sitMix);
+    out.eyeOpen = lerp(out.eyeOpen, 0.42, ix);
+    out.browDown += 0.9 * ix;
+    out.headNod *= 1 + 0.4 * ix;
+
+    // Startled (woken up, or the drop hit while he was sitting): eyes wide, a jolt,
+    // arms fly out, then it fades.
     const since = t - this.startleAt;
     if (since >= 0 && since < 1.2) {
       const e = Math.exp(-since * 4);
       out.eyeOpen = 1;
+      out.browDown -= 1.2 * e;
       out.headNod -= 0.35 * e;
       out.lean -= 0.15 * e;
       out.armOutL += 1.1 * e;
       out.armOutR += 1.1 * e;
       out.elbowL += 0.6 * e;
       out.elbowR += 0.6 * e;
+    }
+
+    // Reactions to things he heard.
+    if (around.cue && (!this.cue || t - this.cueAt > CUE_SECONDS[this.cue])) {
+      this.cue = around.cue;
+      this.cueAt = t;
+    }
+    if (this.cue) {
+      const cu = (t - this.cueAt) / CUE_SECONDS[this.cue];
+      if (cu <= 1) react(out, this.cue, cu, t);
     }
 
     if (this.time > this.nextBlink) {
@@ -672,6 +971,10 @@ function lerpPose(a: Pose, b: Pose, t: number): Pose {
     out[key] = a[key] + (b[key] - a[key]) * t;
   }
   return out;
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
 }
 
 function frac(x: number): number {

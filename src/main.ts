@@ -4,14 +4,19 @@ import { FeatureExtractor } from './audio/FeatureExtractor';
 import { FileTrack } from './audio/sources/FileTrack';
 import { MicInput } from './audio/sources/MicInput';
 import { SIM_STYLES, SimulatedSource, type SimStyleName } from './audio/sources/SimulatedSource';
+import { SimulatedTalk } from './audio/sources/SimulatedTalk';
+import { SpeechDetector } from './audio/SpeechDetector';
+import { SpeechTap } from './audio/SpeechTap';
 import { SynthTrack } from './audio/sources/SynthTrack';
 import { SystemAudio } from './audio/sources/SystemAudio';
 import { SILENT_FEATURES, type AudioFeatures, type SpectrumSource } from './audio/types';
 import { VIBE_NAMES, VibeDetector, type VibeTraits } from './audio/VibeDetector';
 import { ACCESSORIES } from './character/accessories';
 import { Body } from './character/Body';
-import { Dancer, MOVES } from './character/Dancer';
+import { Dancer, MOVES, type Cue, type Posture } from './character/Dancer';
 import { DEFAULT_COLORS, LilGuy, type LilGuyColors, type SlotName } from './character/LilGuy';
+import { setOutlineViewport } from './render/toon';
+import { ContactShadow } from './scene/ContactShadow';
 import { PROPS, type Prop } from './scene/props';
 import { Zzz } from './scene/Zzz';
 
@@ -28,19 +33,27 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// Neutral keeps the brand colors true and only rolls off the brightest highlights.
+renderer.toneMapping = THREE.NeutralToneMapping;
+renderer.toneMappingExposure = 1.05;
 stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 50);
 
-scene.add(new THREE.HemisphereLight('#ffffff', '#b8b5d6', 1.6));
-const sun = new THREE.DirectionalLight('#ffffff', 1.8);
-sun.position.set(2, 4, 3);
+// A warm key light from upper right does the shading; a soft cool sky/bounce fills the
+// shadow side so it stays colorful instead of going grey. (The rim light lives in the
+// toon shader, see render/toon.ts.)
+scene.add(new THREE.HemisphereLight('#f3efff', '#9d94c8', 1.15));
+const sun = new THREE.DirectionalLight('#fff3e6', 2.4);
+sun.position.set(2, 3.2, 4.2);
 sun.castShadow = true;
 sun.shadow.mapSize.set(1024, 1024);
 sun.shadow.camera.left = sun.shadow.camera.bottom = -1.5;
 sun.shadow.camera.right = sun.shadow.camera.top = 1.5;
 sun.shadow.radius = 6;
+sun.shadow.bias = -0.0005;
+sun.shadow.normalBias = 0.02;
 scene.add(sun);
 
 const ground = new THREE.Mesh(new THREE.CircleGeometry(1, 48), new THREE.ShadowMaterial({ opacity: 0.18 }));
@@ -63,6 +76,8 @@ const dancer = new Dancer();
 const body = new Body(guy.rig);
 const zzz = new Zzz();
 scene.add(zzz.object);
+const contact = new ContactShadow();
+scene.add(contact.object);
 for (const k of ['sitAfter', 'napAfter'] as const) {
   if (params.get(k)) dancer[k] = Number(params.get(k));
 }
@@ -109,6 +124,7 @@ function resize() {
   const w = stage.clientWidth;
   const h = stage.clientHeight;
   renderer.setSize(w, h);
+  setOutlineViewport(renderer);
   camera.aspect = w / h;
   frameCamera();
 }
@@ -123,6 +139,25 @@ type Mode = 'off' | 'simulated' | 'synth' | 'file' | 'mic' | 'system';
 const extractor = new FeatureExtractor();
 const vibeDetector = new VibeDetector();
 const simulated = new SimulatedSource();
+const speech = new SpeechDetector();
+/** Simulated talking (podcast / video), with or without a background track. */
+const TALK_STYLES = { talk: { label: 'Podcast / video (talking)', bed: 0 }, talkbed: { label: 'Video with background music', bed: 0.6 } };
+type TalkStyleName = keyof typeof TALK_STYLES;
+const simTalk = new SimulatedTalk();
+let talkStyle: TalkStyleName | null = null;
+/** A reaction cue waiting to be handed to the dancer (from transcribed words). */
+let pendingCue: Cue | null = null;
+/**
+ * Desktop app only, when the user turns on "understand speech": hands audio of people
+ * talking to the on-device transcriber. Never runs in a plain browser.
+ */
+let understandSpeech = desktop && params.get('understand') === '1';
+const speechTap = new SpeechTap((samples) => window.lilguy?.hear(samples));
+function syncSpeechTap() {
+  const want = understandSpeech && !!window.lilguy && !!engine && spectrumSource === engine;
+  if (want && !speechTap.running) void speechTap.start(engine!).catch((err) => console.error('speech tap', err));
+  else if (!want && speechTap.running) speechTap.stop();
+}
 const synth = new SynthTrack();
 let engine: AudioEngine | null = null;
 let playback: PlaybackSource | null = null;
@@ -130,11 +165,22 @@ let mode: Mode = 'off';
 let spectrumSource: SpectrumSource | null = null;
 let spectrum = new Uint8Array(1024);
 
-function getEngine(): AudioEngine {
-  engine ??= new AudioEngine();
+/** The audio engine, with an output device only if this source plays sound. */
+async function getEngine(output: boolean): Promise<AudioEngine> {
+  if (engine && engine.output !== output) {
+    speechTap.stop();
+    engine.close();
+    engine = null;
+  }
+  engine ??= new AudioEngine(output);
   engine.setVolume(Number(volumeInput.value) / 100);
+  await engine.resume();
   return engine;
 }
+
+/** For the "connected but hearing nothing" check on capture sources. */
+let listeningSince = 0;
+let heardSomething = false;
 
 async function setMode(next: Mode, file?: File) {
   playback?.stop();
@@ -142,14 +188,13 @@ async function setMode(next: Mode, file?: File) {
   spectrumSource = null;
   extractor.reset();
   vibeDetector.reset();
+  speech.reset();
 
   try {
     if (next === 'simulated') {
       simulated.playing = true;
-      spectrumSource = simulated;
+      spectrumSource = talkStyle ? simTalk : simulated;
     } else if (next !== 'off') {
-      const eng = getEngine();
-      await eng.resume();
       const p: PlaybackSource =
         next === 'synth' ? synth
         : next === 'mic' ? new MicInput(deviceSelect.value || undefined)
@@ -161,8 +206,49 @@ async function setMode(next: Mode, file?: File) {
         void setMode('off').then(() => (hint.textContent = next === 'system' ? 'Sharing stopped.' : 'The input went away.'));
       };
       playback = p;
+      // Capture first, while the click still counts; then the (possibly slow) device.
+      // Each step says what it's doing, so if one stalls you can see which.
+      const steps = performance.now();
+      const say = (text: string) => {
+        if (playback !== p) return;
+        hint.textContent = text;
+        console.info(`[audio] ${text} (${Math.round(performance.now() - steps)} ms)`);
+      };
+      if (p.acquire) {
+        say(
+          next === 'system'
+            ? 'Waiting for you to pick what to share: choose Entire Screen and turn on "Also share system audio".'
+            : 'Waiting for permission to use the input…',
+        );
+        // Chrome on macOS can hang inside its own system-audio capture after you click
+        // Share (seen with Bluetooth headphones). We can't cancel it, but we can say so.
+        const stuck = window.setTimeout(
+          () =>
+            say(
+              next === 'system'
+                ? "Still waiting on Chrome. If you've already clicked Share, Chrome's system-audio capture is stuck (it happens on Macs, especially with Bluetooth headphones). Try: share a browser tab playing music instead, switch your Mac's output to the built-in speakers, or use the desktop app (npm run desktop), which hears everything."
+                : 'Still waiting for the input. Check for a permission prompt.',
+            ),
+          next === 'system' ? 15000 : 10000,
+        );
+        try {
+          await p.acquire();
+        } finally {
+          clearTimeout(stuck);
+        }
+      }
+      if (playback !== p) {
+        p.stop(); // switched to something else meanwhile
+        return;
+      }
+      say('Got it. Starting the audio engine…');
+      const eng = await getEngine(!p.listenOnly);
+      say('Connecting…');
       await p.start(eng);
       spectrumSource = eng;
+      hint.textContent = '';
+      listeningSince = performance.now();
+      heardSomething = false;
       if (next === 'mic') void refreshDevices(); // labels only show once there's permission
     }
     mode = next;
@@ -177,6 +263,7 @@ async function setMode(next: Mode, file?: File) {
   if (spectrumSource && spectrum.length !== spectrumSource.binCount) {
     spectrum = new Uint8Array(spectrumSource.binCount);
   }
+  syncSpeechTap();
   updateControls(file);
 }
 
@@ -192,6 +279,7 @@ const volumeInput = $<HTMLInputElement>('volume');
 const styleSelect = $<HTMLSelectElement>('sim-style');
 const danceSelect = $<HTMLSelectElement>('dance');
 const propSelect = $<HTMLSelectElement>('prop');
+const talkMeter = $('m-talk');
 const deviceSelect = $<HTMLSelectElement>('input-device');
 
 const HINTS: Record<Mode, string> = {
@@ -203,11 +291,31 @@ const HINTS: Record<Mode, string> = {
   system: 'Listening to what you shared. Stop sharing from the browser bar, or press Stop.',
 };
 
+/**
+ * Capture sources can "work" and still deliver pure silence (macOS permission off, system
+ * audio not ticked in the picker). Say so instead of leaving him sitting there.
+ */
+function checkHearing(now: number) {
+  if ((mode !== 'system' && mode !== 'mic') || heardSomething) return;
+  if (spectrum.some((v) => v > 0)) {
+    heardSomething = true;
+    if (hint.textContent?.startsWith('Connected, but')) hint.textContent = HINTS[mode];
+    return;
+  }
+  if (now - listeningSince > 4000 && !hint.textContent?.startsWith('Connected, but')) {
+    hint.textContent =
+      mode === 'system'
+        ? 'Connected, but no sound is coming through. Is music playing? Check that "Also share system audio" was on, and that Chrome is allowed under System Settings → Privacy & Security → Screen & System Audio Recording (then quit and reopen Chrome).'
+        : "Connected, but the input is silent. Check the input device and that it's not muted.";
+    console.warn('[audio] capture is delivering silence');
+  }
+}
+
 function updateControls(file?: File) {
   document.querySelectorAll<HTMLButtonElement>('[data-source]').forEach((b) => {
     b.classList.toggle('active', b.dataset.source === mode);
   });
-  if (!hint.textContent?.startsWith("Couldn't")) {
+  if (!hint.textContent?.startsWith("Couldn't") && !hint.textContent?.startsWith('Connected, but')) {
     hint.textContent = mode === 'file' && file ? `Playing “${file.name}” on loop.` : HINTS[mode];
   }
   window.lilguy?.status({ mode, text: hint.textContent ?? '' });
@@ -253,10 +361,22 @@ deviceSelect.addEventListener('change', () => {
 void refreshDevices();
 
 for (const [name, style] of Object.entries(SIM_STYLES)) styleSelect.add(new Option(style.label, name));
-styleSelect.addEventListener('change', () => applyStyle(styleSelect.value as SimStyleName));
-function applyStyle(name: SimStyleName) {
-  simulated.setStyle(name);
+for (const [name, style] of Object.entries(TALK_STYLES)) styleSelect.add(new Option(style.label, name));
+styleSelect.addEventListener('change', () => applyStyle(styleSelect.value as SimStyleName | TalkStyleName));
+function applyStyle(name: SimStyleName | TalkStyleName) {
   styleSelect.value = name;
+  speech.reset();
+  if (name in TALK_STYLES) {
+    talkStyle = name as TalkStyleName;
+    simTalk.bed = TALK_STYLES[talkStyle].bed;
+    if (mode === 'simulated') spectrumSource = simTalk;
+    extractor.reset();
+    vibeDetector.reset();
+    return;
+  }
+  talkStyle = null;
+  if (mode === 'simulated') spectrumSource = simulated;
+  simulated.setStyle(name as SimStyleName);
   bpmInput.value = String(simulated.bpm);
   levelInput.value = String(Math.round(simulated.level * 100));
   bpmInput.dispatchEvent(new Event('input'));
@@ -272,6 +392,11 @@ danceSelect.addEventListener('change', () => {
   dancer.force(MOVES.find((m) => m.name === danceSelect.value) ?? null);
   updateControls();
 });
+const postureSelect = $<HTMLSelectElement>('posture');
+for (const [value, label] of [['', 'Auto (follow the music)'], ['stand', 'Stand'], ['sit', 'Sit & vibe'], ['lounge', 'Lounge']]) {
+  postureSelect.add(new Option(label, value));
+}
+postureSelect.addEventListener('change', () => dancer.forcePosture((postureSelect.value || null) as Posture | null));
 
 const bindRange = (input: HTMLInputElement, out: string, apply: (v: number) => void) => {
   const update = () => {
@@ -285,7 +410,10 @@ bindRange(bpmInput, 'bpm-out', (v) => {
   simulated.bpm = v;
   synth.bpm = v;
 });
-bindRange(levelInput, 'level-out', (v) => (simulated.level = v / 100));
+bindRange(levelInput, 'level-out', (v) => {
+  simulated.level = v / 100;
+  simTalk.level = v / 100;
+});
 bindRange(volumeInput, 'volume-out', (v) => engine?.setVolume(v / 100));
 
 // Customization
@@ -328,7 +456,7 @@ setProp(params.get('prop') ?? PROPS[0].id);
 // (in a browser only simulated can autostart; real audio needs a click first).
 if (params.get('ui') === '0') $('panel').hidden = true; // just him, no test bench
 const styleParam = params.get('style');
-if (styleParam && styleParam in SIM_STYLES) applyStyle(styleParam as SimStyleName);
+if (styleParam && (styleParam in SIM_STYLES || styleParam in TALK_STYLES)) applyStyle(styleParam as SimStyleName | TalkStyleName);
 if (params.get('bpm')) {
   bpmInput.value = params.get('bpm')!;
   bpmInput.dispatchEvent(new Event('input'));
@@ -340,6 +468,11 @@ const moveParam = params.get('move');
 if (moveParam && MOVES.some((m) => m.name === moveParam)) {
   danceSelect.value = moveParam;
   danceSelect.dispatchEvent(new Event('change'));
+}
+const postureParam = params.get('posture');
+if (postureParam && ['stand', 'sit', 'lounge'].includes(postureParam)) {
+  postureSelect.value = postureParam;
+  postureSelect.dispatchEvent(new Event('change'));
 }
 // ?at=<seconds>: simulate that long, then hold still on that frame (for screenshots).
 const freezeAt = params.get('at') ? Number(params.get('at')) : null;
@@ -353,6 +486,11 @@ window.lilguy?.onCommand((cmd) => {
     void setMode(cmd.value === 'demo' ? 'simulated' : cmd.value);
   } else if (cmd.type === 'prop') {
     setProp(cmd.value);
+  } else if (cmd.type === 'understand') {
+    understandSpeech = cmd.value;
+    syncSpeechTap();
+  } else if (cmd.type === 'cue') {
+    pendingCue = cmd.value;
   }
 });
 
@@ -393,11 +531,17 @@ function step(t: number, dt: number) {
   let features: AudioFeatures = extractor.process(spectrum, spectrumSource?.binHz ?? 23.4375, t);
   if (!spectrumSource && danceSelect.value) features = metronome(t);
 
-  const vibe = vibeDetector.process(spectrum, spectrumSource?.binHz ?? 23.4375, features);
-  const pose = dancer.update(features, vibe, dt);
+  const binHz = spectrumSource?.binHz ?? 23.4375;
+  const vibe = vibeDetector.process(spectrum, binHz, features);
+  const heard = speech.process(spectrum, binHz, t, features.active && !!spectrumSource);
+  if (speechTap.running) speechTap.update(heard.talk > 0.6, heard.speaking, dt);
+  const pose = dancer.update(features, vibe, dt, { talk: heard.talk, speaking: heard.speaking, cue: pendingCue });
+  pendingCue = null;
   body.update(pose, dt);
   body.apply();
   prop.update(features, dt);
+  contact.object.visible = !(desktop && prop.id === 'none');
+  contact.update(guy.rig, prop.top, prop.frontEdge);
   zzz.update(guy.rig.head.getWorldPosition(headTop).add(ZZZ_OFFSET), dancer.sleepiness, dt);
   return { features, vibe };
 }
@@ -446,6 +590,8 @@ function frame(now: number) {
   meters.mid.style.width = `${features.mid * 100}%`;
   meters.treble.style.width = `${features.treble * 100}%`;
   meters.intensity.style.width = `${dancer.intensity * 100}%`;
+  talkMeter.style.width = `${speech.current.talk * 100}%`;
+  checkHearing(now);
 
   renderer.render(scene, camera);
   requestAnimationFrame(frame);

@@ -30,6 +30,8 @@ const TUNING = {
   leg: [38, 0.9],
   /** Sitting down / standing up: slow and smooth, no bounce. */
   sit: [7, 1],
+  /** Facial expression (brows). */
+  face: [24, 1],
 } as const satisfies Record<string, readonly [number, number]>;
 
 const GROUP: Partial<Record<keyof Pose, keyof typeof TUNING>> = {
@@ -41,6 +43,7 @@ const GROUP: Partial<Record<keyof Pose, keyof typeof TUNING>> = {
   elbowL: 'elbow', elbowR: 'elbow', elbowUpL: 'elbow', elbowUpR: 'elbow',
   wristL: 'elbow', wristR: 'elbow', wristUpL: 'elbow', wristUpR: 'elbow',
   sit: 'sit',
+  browDown: 'face',
   legL: 'leg', legR: 'leg', footLiftL: 'leg', footLiftR: 'leg', footFwdL: 'leg', footFwdR: 'leg', footOutL: 'leg', footOutR: 'leg',
 };
 
@@ -290,6 +293,17 @@ export class Body {
 
     const eyeY = clamp(this.eyeOpen, 0.1, 1);
     for (const e of r.eyes) e.scale.y = eyeY;
+
+    // Brows: down and pinched toward the middle when focused / intense, up when surprised.
+    const brow = clamp(p('browDown'), -1, 1);
+    for (const b of r.brows) {
+      const rest = b.userData.rest as { position: THREE.Vector3; quaternion: THREE.Quaternion };
+      b.position.copy(rest.position);
+      b.position.y -= 0.016 * brow;
+      b.position.x -= 0.006 * brow * b.userData.side;
+      _browTilt.setFromAxisAngle(_z, 0.32 * brow * b.userData.side);
+      b.quaternion.copy(rest.quaternion).multiply(_browTilt);
+    }
   }
 
 }
@@ -305,6 +319,8 @@ const _x = new THREE.Vector3(1, 0, 0);
 const _qa = new THREE.Quaternion();
 const _qb = new THREE.Quaternion();
 const _qFoot = new THREE.Quaternion();
+const _browTilt = new THREE.Quaternion();
+const _z = new THREE.Vector3(0, 0, 1);
 
 /**
  * Bend the leg so the ankle lands on `ankleTarget` (root space). Knee points forward;

@@ -8,6 +8,7 @@ import type { AudioEngine, PlaybackSource } from '../AudioEngine';
  */
 export class MicInput implements PlaybackSource {
   onEnded?: () => void;
+  readonly listenOnly = true;
 
   private stream: MediaStream | null = null;
   private node: MediaStreamAudioSourceNode | null = null;
@@ -20,7 +21,7 @@ export class MicInput implements PlaybackSource {
     return (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
   }
 
-  async start(engine: AudioEngine): Promise<void> {
+  async acquire(): Promise<void> {
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: false,
@@ -30,7 +31,11 @@ export class MicInput implements PlaybackSource {
       },
     });
     this.stream.getAudioTracks()[0]?.addEventListener('ended', () => this.onEnded?.());
-    this.node = engine.ctx.createMediaStreamSource(this.stream);
+  }
+
+  async start(engine: AudioEngine): Promise<void> {
+    if (!this.stream) await this.acquire();
+    this.node = engine.ctx.createMediaStreamSource(this.stream!);
     this.node.connect(engine.analyser);
   }
 

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { addOutlines, radialTexture, removeOutlines, SKIN_TONE, toonMaterial, verticalTexture } from '../render/toon';
 
 export interface LilGuyColors {
   skin: string;
@@ -41,6 +42,8 @@ export interface Rig {
   arms: { L: ArmRig; R: ArmRig };
   legs: { L: LegRig; R: LegRig };
   eyes: THREE.Object3D[];
+  /** Eyebrows; `userData.side` is +1 (his left) or -1, `userData.rest` their rest transform. */
+  brows: THREE.Object3D[];
   slots: Record<SlotName, THREE.Group>;
 }
 
@@ -82,17 +85,31 @@ export class LilGuy {
 
   constructor(colors: Partial<LilGuyColors> = {}) {
     const c = { ...DEFAULT_COLORS, ...colors };
-    const gradient = toonGradient();
-    const mat = (color: string) => new THREE.MeshToonMaterial({ color, gradientMap: gradient });
     this.materials = {
-      skin: mat(c.skin),
-      shirt: mat(c.shirt),
-      pants: mat(c.pants),
-      shoes: mat(c.shoes),
+      skin: toonMaterial(c.skin, SKIN_TONE),
+      shirt: toonMaterial(c.shirt),
+      pants: toonMaterial(c.pants),
+      shoes: toonMaterial(c.shoes),
     };
-    const dark = new THREE.MeshBasicMaterial({ color: '#1e1e24' });
+    const sole = toonMaterial('#c9c3e0');
+    const dark = new THREE.MeshBasicMaterial({ color: '#241c36' });
     const white = new THREE.MeshBasicMaterial({ color: '#ffffff' });
-    const blush = new THREE.MeshBasicMaterial({ color: '#ff8fa3', transparent: true, opacity: 0.55 });
+    // Iris: near-black on top fading to a glowing color at the bottom (classic toy/anime eye).
+    const iris = new THREE.MeshBasicMaterial({
+      map: verticalTexture([
+        [0, '#120d1d'],
+        [0.42, '#1a1330'],
+        [0.68, '#4b3596'],
+        [0.86, '#8f7ae8'],
+        [1, '#2a1f4a'],
+      ]),
+    });
+    const blush = new THREE.MeshBasicMaterial({
+      color: '#ff7f9c',
+      map: radialTexture([[0, 0.75], [0.45, 0.5], [1, 0]]),
+      transparent: true,
+      depthWrite: false,
+    });
 
     const root = new THREE.Group();
     root.name = 'LilGuy';
@@ -172,17 +189,17 @@ export class LilGuy {
       { y: DIMS.spineY, blend: 0.07 },
       { y: DIMS.spineY + DIMS.chestY, blend: 0.08 },
     ];
-    skinned(capsuleGeo(0.22, -0.07 + 0.22, 0.57 - 0.22, 18), this.materials.shirt, pelvis, [pelvis, spine, chest], torsoJoints);
+    skinned(capsuleGeo(0.22, -0.07 + 0.22, 0.57 - 0.22, 18, 28), this.materials.shirt, pelvis, [pelvis, spine, chest], torsoJoints);
     skinned(tubeGeo(0.2, 0.228, -0.06, 0.12, 6), this.materials.pants, pelvis, [pelvis, spine, chest], torsoJoints);
 
     // --- Arms: sleeve bends at the elbow, hand rides the hand bone ------------
     for (const [side, arm] of [[1, arms.L], [-1, arms.R]] as const) {
       void side;
-      skinned(capsuleGeo(0.06, -0.27, -0.01, 14), this.materials.shirt, arm.upper, [arm.fore, arm.upper], [
+      skinned(capsuleGeo(0.06, -0.27, -0.01, 14, 20), this.materials.shirt, arm.upper, [arm.fore, arm.upper], [
         { y: -DIMS.upperArm, blend: 0.05 },
       ]);
       // Mitten-shaped (longer than wide) so wrist bends actually show.
-      const hand = mesh(new THREE.SphereGeometry(0.075, 16, 12), this.materials.skin);
+      const hand = mesh(new THREE.SphereGeometry(0.075, 24, 16), this.materials.skin);
       hand.scale.set(0.92, 1.22, 0.85);
       hand.position.y = -0.04;
       arm.hand.add(hand);
@@ -190,38 +207,59 @@ export class LilGuy {
 
     // --- Legs: bend at the knee, shoe rides the foot bone ---------------------
     for (const leg of [legs.L, legs.R]) {
-      skinned(capsuleGeo(0.075, -0.37, -0.02, 16), this.materials.pants, leg.thigh, [leg.shin, leg.thigh], [
+      skinned(capsuleGeo(0.075, -0.37, -0.02, 16, 20), this.materials.pants, leg.thigh, [leg.shin, leg.thigh], [
         { y: -DIMS.thigh, blend: 0.06 },
       ]);
-      const shoe = mesh(new THREE.SphereGeometry(0.1, 16, 12), this.materials.shoes);
+      const shoe = mesh(new THREE.SphereGeometry(0.1, 24, 16), this.materials.shoes);
       shoe.scale.set(1, 0.6, 1.4);
       shoe.position.set(0, 0, 0.04);
       leg.foot.add(shoe);
+      // A chunky sneaker sole so the shoe has a real base.
+      const base = mesh(new THREE.CylinderGeometry(0.098, 0.1, 0.026, 24), sole);
+      base.scale.set(1, 1, 1.38);
+      base.position.set(0, -0.045, 0.04);
+      leg.foot.add(base);
     }
 
     // --- Head (rigid) ---------------------------------------------------------
-    const skull = mesh(new THREE.SphereGeometry(0.32, 32, 24), this.materials.skin);
+    const skull = mesh(new THREE.SphereGeometry(0.32, 48, 32), this.materials.skin);
     skull.position.y = 0.28;
     head.add(skull);
 
     const eyes: THREE.Object3D[] = [];
+    const brows: THREE.Object3D[] = [];
     for (const side of [1, -1]) {
       const eye = new THREE.Group();
-      eye.position.set(0.11 * side, 0.3, 0.29);
-      const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.045, 16, 12), dark);
-      pupil.scale.set(1, 1.25, 0.5);
-      const shine = new THREE.Mesh(new THREE.SphereGeometry(0.014, 8, 6), white);
-      shine.position.set(0.015, 0.02, 0.022);
-      eye.add(pupil, shine);
+      eye.position.set(0.11 * side, 0.3, 0.282);
+      const ball = new THREE.Mesh(new THREE.SphereGeometry(0.051, 24, 16), iris);
+      ball.scale.set(1, 1.28, 0.5);
+      // Two catchlights, mirrored so both eyes are lit from the same side.
+      const big = new THREE.Mesh(new THREE.SphereGeometry(0.016, 12, 8), white);
+      big.scale.set(1, 1.2, 0.5);
+      big.position.set(0.016, 0.024, 0.021);
+      const small = new THREE.Mesh(new THREE.SphereGeometry(0.0075, 10, 6), white);
+      small.scale.set(1, 1, 0.5);
+      small.position.set(-0.017, -0.03, 0.018);
+      eye.add(ball, big, small);
       head.add(eye);
       eyes.push(eye);
 
-      const cheek = new THREE.Mesh(new THREE.CircleGeometry(0.04, 16), blush);
-      cheek.position.set(0.19 * side, 0.21, 0.255);
-      cheek.lookAt(cheek.position.clone().multiplyScalar(2).setY(0.21));
+      // Brows sit on the skull's surface, tipped slightly up toward the middle.
+      const brow = new THREE.Mesh(new THREE.CapsuleGeometry(0.011, 0.045, 4, 10), dark);
+      brow.position.set(0.115 * side, 0.405, 0.268);
+      brow.lookAt(brow.position.clone().sub(new THREE.Vector3(0, 0.28, 0)).multiplyScalar(2).add(new THREE.Vector3(0, 0.28, 0)));
+      brow.rotateZ(Math.PI / 2 - 0.12 * side);
+      brow.userData.side = side;
+      brow.userData.rest = { position: brow.position.clone(), quaternion: brow.quaternion.clone() };
+      head.add(brow);
+      brows.push(brow);
+
+      const cheek = new THREE.Mesh(new THREE.CircleGeometry(0.058, 24), blush);
+      cheek.position.set(0.185 * side, 0.205, 0.262);
+      cheek.lookAt(cheek.position.clone().sub(new THREE.Vector3(0, 0.28, 0)).multiplyScalar(2).add(new THREE.Vector3(0, 0.28, 0)));
       head.add(cheek);
     }
-    const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.011, 8, 16, Math.PI), dark);
+    const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.042, 0.01, 8, 24, Math.PI), dark);
     mouth.rotation.z = Math.PI;
     mouth.position.set(0, 0.2, 0.305);
     head.add(mouth);
@@ -242,7 +280,8 @@ export class LilGuy {
       rightHand: slot(arms.R.hand, 'rightHand', [0, -0.04, 0]),
     };
 
-    this.rig = { root, pelvis, spine, chest, neck, head, arms, legs, eyes, slots };
+    this.rig = { root, pelvis, spine, chest, neck, head, arms, legs, eyes, brows, slots };
+    addOutlines(root);
   }
 
   get object(): THREE.Object3D {
@@ -258,13 +297,17 @@ export class LilGuy {
   /** Attach an accessory to a slot, replacing whatever was there. */
   equip(slot: SlotName, item: THREE.Object3D): void {
     this.unequip(slot);
+    addOutlines(item);
     this.rig.slots[slot].add(item);
     this.equipped[slot] = item;
   }
 
   unequip(slot: SlotName): void {
     const current = this.equipped[slot];
-    if (current) this.rig.slots[slot].remove(current);
+    if (current) {
+      this.rig.slots[slot].remove(current);
+      removeOutlines(current);
+    }
     delete this.equipped[slot];
   }
 }
@@ -322,12 +365,4 @@ function mesh(geometry: THREE.BufferGeometry, material: THREE.Material): THREE.M
 function smoothstep(x: number): number {
   const t = x < 0 ? 0 : x > 1 ? 1 : x;
   return t * t * (3 - 2 * t);
-}
-
-function toonGradient(): THREE.DataTexture {
-  const tex = new THREE.DataTexture(new Uint8Array([90, 170, 255]), 3, 1, THREE.RedFormat);
-  tex.minFilter = THREE.NearestFilter;
-  tex.magFilter = THREE.NearestFilter;
-  tex.needsUpdate = true;
-  return tex;
 }

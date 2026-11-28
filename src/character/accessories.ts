@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { toonMaterial } from '../render/toon';
 import type { SlotName } from './LilGuy';
 
 /**
@@ -13,7 +14,7 @@ export interface AccessoryDef {
   build: () => THREE.Object3D;
 }
 
-const toon = (color: string) => new THREE.MeshToonMaterial({ color });
+const toon = (color: string) => toonMaterial(color);
 
 export const ACCESSORIES: AccessoryDef[] = [
   {

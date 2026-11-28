@@ -10,11 +10,12 @@ import type { AudioEngine, PlaybackSource } from '../AudioEngine';
  *   route audio through a loopback device like BlackHole and pick it as the input device.
  *
  * The browser insists on a video track too; it's kept (stopping it can end the share) but
- * never used. Like the mic, this goes straight to the analyser, never the speakers, so the
+ * disabled and shrunk right away, and never read. Like the mic, this goes straight to the analyser, never the speakers, so the
  * music isn't played twice.
  */
 export class SystemAudio implements PlaybackSource {
   onEnded?: () => void;
+  readonly listenOnly = true;
 
   private stream: MediaStream | null = null;
   private node: MediaStreamAudioSourceNode | null = null;
@@ -23,12 +24,15 @@ export class SystemAudio implements PlaybackSource {
     return typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia;
   }
 
-  async start(engine: AudioEngine): Promise<void> {
+  /** Ask for the share. Call straight from the click, before anything slow. */
+  async acquire(): Promise<void> {
     if (!SystemAudio.supported) throw new Error("This browser can't share audio. Try Chrome or Edge.");
 
     // Chrome-specific hints (systemAudio, selfBrowserSurface, …) aren't in the DOM typings yet.
+    // Start the picker on "Entire screen": that's the only choice that carries other apps'
+    // sound (Spotify, Music, …). Shared windows never carry audio in Chrome.
     const options = {
-      video: true,
+      video: { displaySurface: 'monitor' },
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false },
       systemAudio: 'include',
       selfBrowserSurface: 'exclude',
@@ -38,9 +42,12 @@ export class SystemAudio implements PlaybackSource {
 
     const [audio] = this.stream.getAudioTracks();
     if (!audio) {
+      const surface = (this.stream.getVideoTracks()[0]?.getSettings() as { displaySurface?: string } | undefined)?.displaySurface;
       this.stop();
       throw new Error(
-        'No audio was shared. Share again, pick a tab (or your entire screen on Windows) and turn on "Share audio".',
+        surface === 'window'
+          ? "a shared window doesn't include its sound. Share again, choose \"Entire Screen\" and turn on \"Also share system audio\" (for music from an app like Spotify), or pick a browser tab playing music."
+          : 'no sound was shared. Share again: choose "Entire Screen" and turn on "Also share system audio", or pick a browser tab and turn on "Share tab audio".',
       );
     }
     // macOS without the System Audio Recording permission hands back a track that's
@@ -53,6 +60,19 @@ export class SystemAudio implements PlaybackSource {
     }
     // The user can end it from the browser's own "Stop sharing" bar.
     audio.addEventListener('ended', () => this.onEnded?.());
+
+    // The screen video is never looked at: switch it off (it then carries only black
+    // frames) and ask for the smallest, slowest stream. Stopping it outright can end the
+    // whole share, audio included.
+    for (const video of this.stream.getVideoTracks()) {
+      video.enabled = false;
+      void video.applyConstraints({ width: 2, height: 2, frameRate: 1 }).catch(() => {});
+    }
+  }
+
+  async start(engine: AudioEngine): Promise<void> {
+    if (!this.stream) await this.acquire();
+    const [audio] = this.stream!.getAudioTracks();
 
     this.node = engine.ctx.createMediaStreamSource(new MediaStream([audio]));
     this.node.connect(engine.analyser);
